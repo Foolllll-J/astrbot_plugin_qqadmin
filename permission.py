@@ -135,7 +135,7 @@ def perm_required(
     权限检查装饰器。
     :param perm_key: 可选。用户执行命令所需的最低权限键名，默认使用被装饰函数的函数名。
     :param bot_perm: Bot 执行此命令所需的最低权限等级。
-    :param check_at: 是否检查”是否有权对被@者实施操作”。
+    :param check_at: 是否检查“是否有权对被@者实施操作”。
     :param allow_private: 是否允许在私信中执行。
     """
 
