@@ -279,6 +279,8 @@ class JoinHandle:
             comment = raw.get("comment")
             flag = raw.get("flag", "")
             invitor_id = str(raw.get("invitor_id", "")).strip()
+            if invitor_id == "0":
+                invitor_id = ""
             info = await client.get_stranger_info(user_id=int(uid))
             nickname = info.get("nickname") or "未知昵称"
             if info.get("isHideQQLevel"):
