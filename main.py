@@ -28,7 +28,12 @@ from .permission import (
     perm_manager,
     perm_required,
 )
-from .utils import ADMIN_HELP, print_logo
+from .utils import ADMIN_HELP, is_self_recall_target, print_logo
+
+
+def recall_perm_key(event: AiocqhttpMessageEvent) -> str:
+    """撤回指令：撤回目标是发送者自身时走 delete_msg_self 权限，否则走 delete_msg"""
+    return "delete_msg_self" if is_self_recall_target(event) else "delete_msg"
 
 
 class QQAdminPlugin(Star):
@@ -169,10 +174,16 @@ class QQAdminPlugin(Star):
         await self.normal.set_group_name(event, group_name)
 
     @filter.command("撤回")
-    @perm_required(PermLevel.MEMBER)
-    async def delete_msg(self, event: AiocqhttpMessageEvent):
-        "(引用消息)撤回 | 撤回 <@群友> <消息数量>"
-        await self.normal.delete_msg(event)
+    @perm_required(
+        PermLevel.MEMBER,
+        perm_key=recall_perm_key,
+        check_reply=lambda e: not is_self_recall_target(e),
+    )
+    async def delete_msg(
+        self, event: AiocqhttpMessageEvent, count: int | None = None
+    ):
+        """(引用消息)撤回 [数量] | 撤回 <@群友> <消息数量>"""
+        await self.normal.delete_msg(event, count)
 
     @filter.command("发布群公告", desc="(引用图片)发布群公告 xxx")
     @perm_required(PermLevel.ADMIN)
@@ -234,7 +245,7 @@ class QQAdminPlugin(Star):
     ):
         await self.banpro.start_vote_mute(event, ban_time)
 
-    @filter.command("赞同禁言", desc="同意执行当前禁言投票")
+    @filter.command("赞同禁言", alias={"赞成禁言", "同意禁言"}, desc="同意执行当前禁言投票")
     @perm_required(PermLevel.ADMIN, perm_key="vote")
     async def agree_vote_mute(self, event: AiocqhttpMessageEvent):
         await self.banpro.vote_mute(event, agree=True)
@@ -243,6 +254,11 @@ class QQAdminPlugin(Star):
     @perm_required(PermLevel.ADMIN, perm_key="vote")
     async def disagree_vote_mute(self, event: AiocqhttpMessageEvent):
         await self.banpro.vote_mute(event, agree=False)
+
+    @filter.command("取消投票", alias={"结束投票", "撤销投票"}, desc="取消当前群正在进行的禁言投票")
+    @perm_required(PermLevel.ADMIN, perm_key="vote")
+    async def cancel_vote_mute(self, event: AiocqhttpMessageEvent):
+        await self.banpro.cancel_vote_mute(event)
 
     @filter.command("开启宵禁", desc="开启宵禁 HH:MM HH:MM")
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)

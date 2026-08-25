@@ -110,7 +110,8 @@ class ConfigNode:
 
 class VoteBanConfig(ConfigNode):
     ttl: int
-    threshold: int
+    min_votes: int
+    agree_ratio: float
 
 
 class PluginConfig(ConfigNode):

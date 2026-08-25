@@ -10,6 +10,23 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
 
+
+def format_duration(seconds: int) -> str:
+    """把秒数格式化为易读时长：180 -> '3分钟'，3700 -> '1小时1分钟'"""
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}秒"
+    if seconds < 3600:
+        m, rem = divmod(seconds, 60)
+        return f"{m}分钟" if rem == 0 else f"{m}分钟{rem}秒"
+    if seconds < 86400:
+        h, rem = divmod(seconds, 3600)
+        m = rem // 60
+        return f"{h}小时" if m == 0 else f"{h}小时{m}分钟"
+    d, rem = divmod(seconds, 86400)
+    h = rem // 3600
+    return f"{d}天" if h == 0 else f"{d}天{h}小时"
+
 BAN_ME_QUOTES: list[str] = [
     "还真有人有这种奇怪的要求",
     "满足你",
@@ -34,7 +51,8 @@ ADMIN_HELP = (
     "- 拉黑 @用户：踢出并拉黑指定成员\n"
     "- 上管 @用户：设置管理员（需群主权限）\n"
     "- 下管 @用户：取消管理员（需群主权限）\n"
-    "- 撤回 (引用消息) / 撤回 @用户 数量：撤回消息，默认10条\n"
+    "- 撤回 (引用消息) [数量]：撤回被引用消息发送者的 [数量] 条消息（含引用，默认1条，上限99条）\n"
+    "- 撤回 @用户 数量：撤回该用户最近的 [数量] 条消息（默认10条，上限99条）\n"
     "- 设置群头像 (引用图片)：修改群头像\n"
     "- 设置群名 <新群名>：修改群名称\n"
     "- 设精 (引用消息) / 移精 (引用消息)：管理精华消息\n"
@@ -42,9 +60,10 @@ ADMIN_HELP = (
     "## NoticeHandle 公告管理\n"
     "- 发布群公告 <内容> (可引用图片)：发布群公告\n"
     "- 查看群公告：查看群公告\n\n"
-    "## EnhanceHandle 增强功能\n"
+    "## BanproHandle 违规处理\n"
     "- 投票禁言 <秒数> @用户：发起禁言投票\n"
     "- 赞同禁言 / 反对禁言：投票同意或反对禁言\n"
+    "- 取消投票：取消当前群正在进行的禁言投票\n"
     "- 设置禁词 <词1 词2...>：设置或查看自定义违禁词\n"
     "- 内置禁词 开/关：开启或关闭内置违禁词检测\n"
     "- 刷屏禁言 <秒数>：设置刷屏触发的禁言时长（0 关闭）\n"
@@ -145,6 +164,31 @@ def get_replyer_id(event: AiocqhttpMessageEvent) -> str | None:
     for seg in event.get_messages():
         if isinstance(seg, Reply):
             return str(seg.sender_id)
+
+
+def is_self_recall_target(event: AiocqhttpMessageEvent) -> bool:
+    """
+    判断撤回指令的目标是否为发送者自身。
+
+    - 引用消息：被引用的消息是发送者自己发的
+    - @ 群友：被 @ 的人（排除 bot）全部是发送者自己
+    其余情况返回 False。
+    """
+    chain = event.get_messages()
+    if not chain:
+        return False
+
+    first_seg = chain[0]
+    if isinstance(first_seg, Reply):
+        return str(getattr(first_seg, "sender_id", None) or "") == str(
+            event.get_sender_id()
+        )
+
+    if any(isinstance(seg, At) for seg in chain):
+        targets = get_ats(event)
+        return bool(targets) and set(targets) == {str(event.get_sender_id())}
+
+    return False
 
 
 def get_reply_message_str(event: AiocqhttpMessageEvent) -> str | None:

@@ -10,7 +10,7 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 )
 
 from .config import PluginConfig
-from .utils import get_ats
+from .utils import get_ats, get_replyer_id
 
 
 class PermLevel(IntEnum):
@@ -55,6 +55,8 @@ class PermissionManager:
     def __init__(self):
         self.cfg: PluginConfig | None = None
         self.perms: dict[str, PermLevel] | None = None
+        # 缓存 Bot 自身的群身份（按群号），不常变化；插件重载后随实例失效重新获取
+        self._bot_cache: dict[str, PermLevel] = {}
 
 
     def lazy_init(self, config: PluginConfig):
@@ -64,6 +66,12 @@ class PermissionManager:
         self.perms = {k: PermLevel.from_str(v) for k, v in self.cfg.perms.items()}
         self._initialized = True
 
+    def _level_label(self, level: "PermLevel") -> str:
+        """权限等级展示名；高等级成员附带配置阈值，如 高等级（50）成员"""
+        if level == PermLevel.HIGH and self.cfg is not None:
+            return f"高等级（{self.cfg.level_threshold}）成员"
+        return str(level)
+
     async def get_perm_level(
         self, event: AiocqhttpMessageEvent, user_id: str | int
     ) -> PermLevel:
@@ -72,27 +80,55 @@ class PermissionManager:
             return PermLevel.UNKNOWN
         if self.cfg and str(user_id) in self.cfg.admins_id:
             return PermLevel.SUPERUSER
-        try:
-            info = await event.bot.get_group_member_info(
-                group_id=int(group_id), user_id=int(user_id), no_cache=True
-            )
-        except Exception:
-            return PermLevel.UNKNOWN
+
+        # Bot 自身群身份走缓存，避免每条命令都打 get_group_member_info
+        if str(user_id) == str(event.get_self_id()):
+            cached = self._bot_cache.get(group_id)
+            if cached is not None:
+                return cached
+
+        info = None
+        # 发送者本人优先读事件原始数据（真实 OneBot 事件自带 role/level）
+        if str(user_id) == str(event.get_sender_id()):
+            raw = getattr(getattr(event, "message_obj", None), "raw_message", None)
+            try:
+                sender = raw.get("sender")
+                if isinstance(sender, dict) and sender.get("role"):
+                    info = {"role": sender["role"], "level": sender.get("level")}
+            except (AttributeError, TypeError):
+                pass
+
+        if not info:
+            try:
+                info = await event.bot.get_group_member_info(
+                    group_id=int(group_id), user_id=int(user_id), no_cache=True
+                )
+            except Exception:
+                return PermLevel.UNKNOWN
+
         role = info.get("role", "unknown")
-        level = int(info.get("level", 0))
+        try:
+            level = int(info.get("level", 0))
+        except (TypeError, ValueError):
+            level = 0
         match role:
             case "owner":
-                return PermLevel.OWNER
+                result = PermLevel.OWNER
             case "admin":
-                return PermLevel.ADMIN
+                result = PermLevel.ADMIN
             case "member":
-                return (
+                result = (
                     PermLevel.HIGH
                     if self.cfg and level >= self.cfg.level_threshold
                     else PermLevel.MEMBER
                 )
             case _:
-                return PermLevel.UNKNOWN
+                result = PermLevel.UNKNOWN
+
+        # 缓存 Bot 自身群身份
+        if str(user_id) == str(event.get_self_id()):
+            self._bot_cache[group_id] = result
+        return result
 
     async def perm_block(
         self,
@@ -100,6 +136,7 @@ class PermissionManager:
         bot_perm: PermLevel,
         perm_key: str,
         check_at: bool = True,
+        check_reply: bool = False,
     ) -> str | None:
         user_level = await self.get_perm_level(event, user_id=event.get_sender_id())
 
@@ -107,17 +144,28 @@ class PermissionManager:
         required_level = (self.perms or {}).get(perm_key, PermLevel.ADMIN)
 
         if user_level > required_level:
-            return f"你没{required_level}权限"
+            return f"你没{self._level_label(required_level)}权限"
 
         bot_level = await self.get_perm_level(event, user_id=event.get_self_id())
         if bot_level > bot_perm:
-            return f"我没{bot_perm}权限"
+            return f"我没{self._level_label(bot_perm)}权限"
 
         if check_at:
             for at_id in get_ats(event):
                 at_level = await self.get_perm_level(event, user_id=at_id)
                 if bot_level >= at_level:
-                    return f"我动不了{at_level}"
+                    return f"我动不了{self._level_label(at_level)}"
+
+        if check_reply:
+            reply_id = get_replyer_id(event)
+            if (
+                reply_id
+                and reply_id.isdigit()
+                and reply_id != str(event.get_self_id())
+            ):
+                at_level = await self.get_perm_level(event, user_id=reply_id)
+                if bot_level >= at_level:
+                    return f"我动不了{self._level_label(at_level)}"
 
         return None
 
@@ -127,23 +175,25 @@ perm_manager = PermissionManager()
 
 def perm_required(
     bot_perm: PermLevel = PermLevel.ADMIN,
-    perm_key: str | None = None,
+    perm_key: str | Callable[[AiocqhttpMessageEvent], str] | None = None,
     check_at: bool = True,
+    check_reply: bool | Callable[[AiocqhttpMessageEvent], bool] = False,
     allow_private: bool = False,
 ):
     """
     权限检查装饰器。
     :param perm_key: 可选。用户执行命令所需的最低权限键名，默认使用被装饰函数的函数名。
+        也可传入一个接收 event、返回权限键名的可调用对象，用于按事件动态选择权限项。
     :param bot_perm: Bot 执行此命令所需的最低权限等级。
     :param check_at: 是否检查“是否有权对被@者实施操作”。
+    :param check_reply: 是否检查“是否有权对被引用消息的发送者实施操作”。
+        与 check_at 相同，基于 Bot 自身等级判定；也可传入接收 event、返回 bool 的可调用对象。
     :param allow_private: 是否允许在私信中执行。
     """
 
     def decorator(
         func: Callable[..., AsyncGenerator[Any, Any] | Awaitable[Any]],
     ) -> Callable[..., AsyncGenerator[Any, Any]]:
-        actual_perm_key = perm_key or func.__name__
-
         @wraps(func)
         async def wrapper(
             plugin_instance: Any,
@@ -155,6 +205,13 @@ def perm_required(
             # 仅限aiocqhttp
             if event.platform_meta.name != "aiocqhttp":
                 return
+
+            actual_perm_key = (
+                perm_key(event) if callable(perm_key) else (perm_key or func.__name__)
+            )
+            actual_check_reply = (
+                check_reply(event) if callable(check_reply) else check_reply
+            )
 
             # 私信处理
             if event.is_private_chat():
@@ -172,7 +229,7 @@ def perm_required(
             # 权限管理未初始化
             if not perm_manager._initialized:
                 logger.error(
-                    f"PermissionManager 未初始化（尝试访问权限项：{perm_key}）"
+                    f"PermissionManager 未初始化（尝试访问权限项：{actual_perm_key}）"
                 )
                 yield event.plain_result("内部错误：权限系统未正确加载")
                 event.stop_event()
@@ -180,7 +237,11 @@ def perm_required(
 
             # 判断权限
             result = await perm_manager.perm_block(
-                event, bot_perm=bot_perm, perm_key=actual_perm_key, check_at=check_at
+                event,
+                bot_perm=bot_perm,
+                perm_key=actual_perm_key,
+                check_at=check_at,
+                check_reply=actual_check_reply,
             )
             if result:
                 yield event.plain_result(result)

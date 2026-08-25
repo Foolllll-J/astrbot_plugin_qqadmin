@@ -7,7 +7,7 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 
 from ..config import PluginConfig
 from ..data import QQAdminDB
-from ..utils import get_nickname, get_reply_message_str, parse_bool
+from ..utils import format_duration, get_nickname, get_reply_message_str, parse_bool
 
 
 class JoinHandle:
@@ -161,11 +161,11 @@ class JoinHandle:
         gid = event.get_group_id()
         if isinstance(time, int):
             await self.db.set(gid, "join_ban_time", time)
-            msg = f"本群进群禁言已设为：{time} 秒" if time > 0 else "已关闭本群进群禁言"
+            msg = f"本群进群禁言已设为：{format_duration(time)}" if time > 0 else "已关闭本群进群禁言"
             await event.send(event.plain_result(msg))
         else:
             t = await self.db.get(gid, "join_ban_time", 0)
-            await event.send(event.plain_result(f"本群进群禁言设置：{t} 秒"))
+            await event.send(event.plain_result(f"本群进群禁言设置：{format_duration(t)}"))
 
     async def handle_join_welcome(self, event: AiocqhttpMessageEvent):
         gid = event.get_group_id()
@@ -326,7 +326,7 @@ class JoinHandle:
             if comment:
                 notice += f"\n{comment}"
             if approve_msg:
-                notice += f"\n\n{approve_msg}"
+                notice += f"\n\u200b\n{approve_msg}"
 
             if self.cfg.admin_audit:
                 await self._send_admin(client, notice)

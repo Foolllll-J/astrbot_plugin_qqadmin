@@ -163,7 +163,7 @@
     "items": {
       "ttl": {
         "description": "投票时长（秒）",
-        "hint": "每轮投票时长到达此值时，开始结算，赞同票多于反对票时，禁言生效",
+        "hint": "投票有效期（秒）：期内达成通过条件立即禁言，到期仍未达成则判为无效或否决",
         "type": "int",
         "slider": {
           "min": 60,
@@ -172,16 +172,27 @@
         },
         "default": 120
       },
-      "threshold": {
-        "description": "投票通过所需票数",
-        "hint": "赞同禁言的投票数到达此值时，禁言直接生效",
+      "min_votes": {
+        "description": "结果生效所需最少总票数",
+        "hint": "总票数（赞成+反对）低于此值时，投票视为无效，不执行禁言也不放人",
         "type": "int",
         "slider": {
-          "min": 2,
-          "max": 10,
+          "min": 1,
+          "max": 20,
           "step": 1
         },
         "default": 3
+      },
+      "agree_ratio": {
+        "description": "赞成票所需比例",
+        "hint": "赞成票占有效总票的比例需达到此值（且总票数满足最少票数要求），禁言方可通过；取值范围 0~1",
+        "type": "float",
+        "slider": {
+          "min": 0.1,
+          "max": 1,
+          "step": 0.1
+        },
+        "default": 0.5
       }
     }
   },
@@ -373,6 +384,19 @@
       },
       "delete_msg": {
         "description": "撤回",
+        "type": "string",
+        "options": [
+          "超管",
+          "群主",
+          "管理员",
+          "高等级成员",
+          "成员"
+        ],
+        "default": "成员"
+      },
+      "delete_msg_self": {
+        "description": "撤回自己的消息",
+        "hint": "当撤回的目标（引用的消息、被@的人）是发送者自己时，使用该权限；撤回他人的消息仍使用“撤回”权限",
         "type": "string",
         "options": [
           "超管",
